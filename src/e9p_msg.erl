@@ -266,22 +266,12 @@
                                 | {error, Reason},
                         Reason :: bad_type
                                 | {bad_msg, MsgType :: msg_type()}.
-decode(<<?uint32(Size), Rest0/binary>> = Bin) ->
+decode(<<?uint32(Size), Rest0/binary>> = Bin) when byte_size(Bin) >= Size ->
     SuffixSize = Size - 5,
-    <<?uint8(Type), Msg:SuffixSize/binary, _/binary>> = Rest0,
-    case decode_with_type(decode_type(Type), Msg) of
-        {ok, Decoded} ->
-            {_, Rest1} = split_binary(Bin, Size),
-            {ok, Decoded, Rest1};
-        {error, _} = Error -> Error
-    end;
+    <<?uint8(Type), Msg:SuffixSize/binary, Rest1/binary>> = Rest0,
+    decode_with_type(decode_type(Type), Msg, Rest1);
 decode(Bin) when is_binary(Bin) ->
     {error, badarg}.
-
-decode_with_type({ok, Type}, Bin) ->
-    decode_typed(Type, Bin);
-decode_with_type({error, _} = Error, _Bin) ->
-    Error.
 
 %% @doc Decode a strict 9P message -- this does not permit tail data inside a 9P
 %% message (i.e., an entire message's size must be for the 9P message).
@@ -310,6 +300,19 @@ decode_strict_validate_rest(Result, <<>>) ->
 decode_strict_validate_rest({ok, Msg, _Rest}, _MsgRest) ->
     {error, {non_strict, msg_type(Msg)}}.
 
+%%
+%% Internal
+%%
+
+decode_with_type({ok, Type}, Bin, Rest) ->
+    decode_return_with_rest(decode_typed(Type, Bin), Rest);
+decode_with_type({error, _} = Error, _Bin, _Rest) ->
+    Error.
+
+decode_return_with_rest({ok, Msg}, Rest) ->
+    {ok, Msg, Rest};
+decode_return_with_rest({error, _} = Error, _Rest) ->
+    Error.
 
 -spec decode_type(non_neg_integer()) -> msg_type() | {error, bad_type}.
 decode_type(?Tversion) -> {ok, tversion};
