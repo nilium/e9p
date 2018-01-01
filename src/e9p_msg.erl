@@ -1,9 +1,10 @@
 -module(e9p_msg).
 
--include("e9p_msg.hrl").
+-include_lib("e9p/include/e9p.hrl").
 
 -export([msg_type/1,
          tag/1,
+         rest/1,
          fid/1,
          qid/1,
          afid/1,
@@ -28,23 +29,23 @@
          qid_path/1
         ]).
 
--export([decode/1]).
+-export([decode/1, decode_strict/1]).
 
 
 %% Convenience macros for decoding common types
 %%{{{
 
 -define(uint8(Name),
-        Name:1/unsigned-little-integer).
--define(uint16(Name),
-        Name:2/unsigned-little-integer).
--define(uint32(Name),
-        Name:4/unsigned-little-integer).
--define(uint64(Name),
         Name:8/unsigned-little-integer).
+-define(uint16(Name),
+        Name:16/unsigned-little-integer).
+-define(uint32(Name),
+        Name:32/unsigned-little-integer).
+-define(uint64(Name),
+        Name:64/unsigned-little-integer).
 
 -define(pstring(SizeName, StringName),
-        SizeName:2/unsigned-little-integer, StringName:SizeName/binary).
+        ?uint16(SizeName), StringName:SizeName/binary).
 
 -define(tag(Name), ?uint16(Name)).
 -define(fid(Name), ?uint32(Name)).
@@ -87,11 +88,7 @@
 
 -type dir() :: #dir{}.
 
--type mode() :: read
-              | write
-              | readwrite
-              | exec
-              | truncate.
+-type mode() :: non_neg_integer().
 %% An open mode. `truncate' may only be specified as the second element of a mode list.
 
 -export_types([type/0, tmsg/0, rmsg/0, msg/0]).
@@ -237,24 +234,82 @@
 %%}}}
 
 %%
+%% Constructing messages
+%%
+%%{{{
+
+%% file_mode([read|Opt]) -> truncate_mode(Opt);
+%% file_mode([write|Opt]) -> 1 bor truncate_mode(Opt);
+%% file_mode([readwrite|Opt]) -> 2 bor truncate_mode(Opt);
+%% file_mode([exec|Opt]) -> 3 bor truncate_mode(Opt).
+
+%% truncate_mode([]) -> 0;
+%% truncate_mode([truncate]) -> 16#10.
+
+%%%}}}
+
+
+%%
 %% Decode messages
 %%
+%%{{{
 
 %% @doc Decode a 9P message. Upon success, returns a tuple of `ok', the message,
-%% the remaining un-decoded binary from `Bin'.
+%% and the remaining un-decoded binary from `Bin'.
+%%
+%% If a message cannot be decoded from Bin, {error, {bad_msg, MsgType}} is
+%% returned if the message is correctly typed. Otherwise, {error, badarg} is
+%% returned for purely invalid binaries.
 -spec decode(Bin :: binary())
             -> Result
                    when Result :: {ok, Decoded :: msg(), Rest :: binary()}
                                 | {error, Reason},
                         Reason :: bad_type
-                                | {bad_msg, msg_type()}.
-decode(<<?uint32(Size), Rest/binary>> = _Bin) ->
+                                | {bad_msg, MsgType :: msg_type()}.
+decode(<<?uint32(Size), Rest0/binary>> = Bin) ->
     SuffixSize = Size - 5,
-    <<?uint8(Type), Msg:SuffixSize/binary, _/binary>> = Rest,
-    case decode_type(Type) of
-        {ok, TypeName} -> decode_typed(Msg, TypeName);
+    <<?uint8(Type), Msg:SuffixSize/binary, _/binary>> = Rest0,
+    case decode_with_type(decode_type(Type), Msg) of
+        {ok, Decoded} ->
+            {_, Rest1} = split_binary(Bin, Size),
+            {ok, Decoded, Rest1};
         {error, _} = Error -> Error
-    end.
+    end;
+decode(Bin) when is_binary(Bin) ->
+    {error, badarg}.
+
+decode_with_type({ok, Type}, Bin) ->
+    decode_typed(Type, Bin);
+decode_with_type({error, _} = Error, _Bin) ->
+    Error.
+
+%% @doc Decode a strict 9P message -- this does not permit tail data inside a 9P
+%% message (i.e., an entire message's size must be for the 9P message).
+%%
+%% If a valid non-strict message is read, decode_strict will return
+%% {error, {non_strict, MsgType}}. Otherwise, if the message is simply invalid,
+%% it returns {error, {bad_msg, MsgType}}, the same as decode/1.
+-spec decode_strict(Bin :: binary())
+                   -> Result
+                          when Result :: {ok, Decoded :: msg(), Rest :: binary()}
+                                       | {error, Reason},
+                               Reason :: bad_type
+                                       | {bad_msg, MsgType}
+                                       | {non_strict, MsgType},
+                               MsgType :: msg_type().
+decode_strict(Bin) when is_binary(Bin) ->
+    decode_strict_validate(decode(Bin)).
+
+decode_strict_validate({ok, Msg, _Rest} = Result) ->
+    decode_strict_validate_rest(Result, rest(Msg));
+decode_strict_validate({error, _Reason} = Error) ->
+    Error.
+
+decode_strict_validate_rest(Result, <<>>) ->
+    Result;
+decode_strict_validate_rest({ok, Msg, _Rest}, _MsgRest) ->
+    {error, {non_strict, msg_type(Msg)}}.
+
 
 -spec decode_type(non_neg_integer()) -> msg_type() | {error, bad_type}.
 decode_type(?Tversion) -> {ok, tversion};
@@ -286,8 +341,6 @@ decode_type(?Twstat)   -> {ok, twstat};
 decode_type(?Rwstat)   -> {ok, rwstat};
 decode_type(_)         -> {error, bad_type}.
 
--spec decode_typed(tag(), binary())
-                  -> {ok, msg()} | {error, term()}.
 decode_typed(tversion, Msg) -> decode_tversion(Msg);
 decode_typed(rversion, Msg) -> decode_rversion(Msg);
 decode_typed(tauth, Msg)    -> decode_tauth(Msg);
@@ -331,7 +384,7 @@ decode_typed(rwstat, Msg)   -> decode_rwstat(Msg).
 -define(QTAPPEND, 16#40).
 -define(QTDIR,    16#80).
 
--spec decode_qid_type(non_neg_integer()) -> qid_type().
+-spec decode_qid_type(non_neg_integer()) -> qid_type() | {error, bad_qid}.
 decode_qid_type(?QTFILE) ->
     {ok, file};
 decode_qid_type(?QTTMP) ->
@@ -347,179 +400,294 @@ decode_qid_type(?QTAPPEND) ->
 decode_qid_type(?QTDIR) ->
     {ok, dir};
 decode_qid_type(_Type) ->
-    {error, bad_type}.
+    {error, bad_qid}.
 
 decode_qid(<<?uint8(TypeBit), ?uint32(Version), ?uint64(Path)>>) ->
-    case decode_qid_type(TypeBit) of
-        {ok, Type} ->
-            {ok, #qid{type = Type, version = Version, path = Path}};
-        _ ->
-            {error, bad_qid}
-    end;
+    decode_typed_qid(
+      decode_qid_type(TypeBit),
+      #qid{version = Version, path = Path});
 decode_qid(_Qid) ->
     {error, bad_qid}.
+
+decode_typed_qid({ok, Type}, Qid) ->
+    {ok, Qid#qid{type = Type}};
+decode_typed_qid({error, _} = Error, _Qid) ->
+    Error.
 
 %% Version
 
 -spec decode_tversion(binary()) -> {ok, tversion()} | {error, {bad_msg, tversion}}.
-decode_tversion(<<?tag(Tag), ?uint32(Msize), ?pstring(Len, Version)>>) ->
+decode_tversion(<<?tag(Tag), ?uint32(Msize), ?pstring(Len, Version), Rest/binary>>) ->
     {ok,
      #tversion{
         tag     = Tag,
         msize   = Msize,
-        version = Version
+        version = Version,
+        rest    = Rest
        }};
 decode_tversion(_) ->
     {error, {bad_msg, tversion}}.
 
--spec decode_rversion(binary()) -> {ok, rversion()} | {error, {bad_msg, tversion}}.
-decode_rversion(<<?tag(Tag), ?uint32(Msize), ?pstring(Len, Version)>>) ->
+-spec decode_rversion(binary()) -> {ok, rversion()} | {error, {bad_msg, rversion}}.
+decode_rversion(<<?tag(Tag), ?uint32(Msize), ?pstring(Len, Version), Rest/binary>>) ->
     {ok,
      #tversion{
         tag     = Tag,
         msize   = Msize,
-        version = Version
+        version = Version,
+        rest    = Rest
        }};
 decode_rversion(_Msg) ->
     {error, {bad_msg, rversion}}.
 
 %% Auth
 
-decode_tauth(<<?tag(Tag), ?uint32(Afid), ?pstring(UnameLen, Uname), ?pstring(AnameLen, Aname)>>) ->
+decode_tauth(<<?tag(Tag),
+               ?uint32(Afid),
+               ?pstring(UnameLen, Uname),
+               ?pstring(AnameLen, Aname),
+               Rest/binary
+             >>) ->
     {ok,
      #tauth{
         tag   = Tag,
         afid  = Afid,
         uname = Uname,
-        aname = Aname
+        aname = Aname,
+        rest  = Rest
        }};
 decode_tauth(_Msg) ->
     {error, {bad_msg, tauth}}.
 
-decode_rauth(<<?tag(Tag), ?qid_bytes(AqidBytes)>>) ->
-    case decode_qid(AqidBytes) of
-        {ok, Aqid} ->
-            {ok,
-             #rauth{
-                tag  = Tag,
-                aqid = Aqid
-               }};
-        {error, _} ->
-            {error, {bad_msg, rauth}}
-    end;
+decode_rauth(<<?tag(Tag), ?qid_bytes(AqidBytes), Rest/binary>>) ->
+    decode_rauth_aqid(
+      decode_qid(AqidBytes),
+      #rauth{
+         tag  = Tag,
+         rest = Rest
+        });
 decode_rauth(_Msg) ->
+    {error, {bad_msg, rauth}}.
+
+decode_rauth_aqid({ok, Qid}, #rauth{} = Rauth) ->
+    {ok, Rauth#rauth{aqid = Qid}};
+decode_rauth_aqid({error, _}, #rauth{} = _Rauth) ->
     {error, {bad_msg, rauth}}.
 
 %% Error
 
-decode_rerror(<<?tag(Tag), ?pstring(Len, Ename)>>) ->
+decode_rerror(<<?tag(Tag), ?pstring(Len, Ename), Rest/binary>>) ->
     {ok,
      #rerror{
         tag   = Tag,
-        ename = Ename
+        ename = Ename,
+        rest  = Rest
        }};
 decode_rerror(_Msg) ->
     {error, {bad_msg, rerror}}.
 
 %% Flush
 
-decode_tflush(Msg) ->
-	{error, unimplemented}.
+decode_tflush(<<?tag(Tag), ?tag(OldTag), Rest/binary>>) ->
+    {ok,
+     #tflush{
+        tag    = Tag,
+        oldtag = OldTag,
+        rest           = Rest
+       }};
+decode_tflush(_Msg) ->
+    {error, {bad_msg, tflush}}.
 
-decode_rflush(Msg) ->
-	{error, unimplemented}.
+decode_rflush(<<?tag(Tag), Rest/binary>>) ->
+    {ok,
+     #rflush{
+        tag  = Tag,
+        rest = Rest
+       }};
+decode_rflush(_Msg) ->
+    {error, {bad_msg, rflush}}.
 
 %% Attach
 
-decode_tattach(Msg) ->
-	{error, unimplemented}.
+decode_tattach(<<?tag(Tag),
+                 ?fid(Fid),
+                 ?fid(Afid),
+                 ?pstring(UnameLen, Uname),
+                 ?pstring(AnameLen, Aname),
+                 Rest/binary
+               >>) ->
+    {ok,
+     #tattach{
+        tag   = Tag,
+        fid   = Fid,
+        afid  = Afid,
+        uname = Uname,
+        aname = Aname,
+        rest  = Rest
+       }};
+decode_tattach(_Msg) ->
+    {error, {bad_msg, tattach}}.
 
-decode_rattach(Msg) ->
-	{error, unimplemented}.
+decode_rattach(<<?tag(Tag), ?qid_bytes(QidBytes), Rest/binary>>) ->
+    decode_rattach_qid(
+      decode_qid(QidBytes),
+      #rattach{
+         tag  = Tag,
+         rest = Rest
+        });
+decode_rattach(_Msg) ->
+    {error, {bad_msg, rattach}}.
+
+decode_rattach_qid({ok, Qid}, #rattach{} = Rattach) ->
+    {ok, Rattach#rattach{qid = Qid}};
+decode_rattach_qid({error, _}, #rattach{} = _Rattach) ->
+    {error, {bad_msg, rattach}}.
 
 %% Walk
 
-decode_twalk(Msg) ->
-	{error, unimplemented}.
+decode_twalk(<<?tag(Tag), ?fid(Fid), ?fid(NewFid), ?uint16(NamesLen), Rest0/binary>>) ->
+    decode_twalk_names(
+      decode_twalk_name_list(Rest0, NamesLen, []),
+      #twalk{
+         tag    = Tag,
+         fid    = Fid,
+         newfid = NewFid
+        });
+decode_twalk(_Msg) ->
+    {error, {bad_msg, twalk}}.
 
-decode_rwalk(Msg) ->
-	{error, unimplemented}.
+decode_twalk_names({ok, Names, Rest}, Twalk) ->
+    {ok,
+     Twalk#twalk{
+       nwname = Names,
+       rest   = Rest
+      }};
+decode_twalk_names({error, _}, #twalk{} = _Twalk) ->
+    {error, {bad_msg, twalk}}.
+
+decode_twalk_name_list(<<Rest/binary>>, 0, Names) ->
+    {ok, lists:reverse(Names), Rest};
+decode_twalk_name_list(<<?pstring(NameLen, Name), Rest/binary>>, N, Names) when N > 0 ->
+    decode_twalk_name_list(Rest, N-1, [Name|Names]);
+decode_twalk_name_list(_Msg, _N, _Names) ->
+    {error, {bad_msg, twalk}}.
+
+decode_rwalk(<<?tag(Tag), ?uint16(QidsLen), Rest0/binary>>) ->
+    decode_rwalk_qids(
+      decode_rwalk_qid_list(Rest0, QidsLen, []),
+      #rwalk{tag = Tag});
+decode_rwalk(_Msg) ->
+    {error, {bad_msg, rwalk}}.
+
+decode_rwalk_qids({ok, Qids, Rest}, #rwalk{} = Rwalk) ->
+    {ok,
+     Rwalk#rwalk{
+       nwqid = Qids,
+       rest  = Rest
+      }};
+decode_rwalk_qids({error, _}, #rwalk{} = _Rwalk) ->
+    {error, {bad_msg, rwalk}}.
+
+decode_rwalk_qid_list(<<Rest/binary>>, 0, Qids) ->
+    {ok, lists:reverse(Qids), Rest};
+decode_rwalk_qid_list(<<?qid_bytes(QidBytes), Rest/binary>>, N, Qids) when N > 0 ->
+    decode_rwalk_qid_list({decode_qid(QidBytes), Rest}, N, Qids);
+decode_rwalk_qid_list({{ok, Qid}, Rest}, N, Qids) when N > 0 ->
+    decode_rwalk_qid_list(Rest, N-1, [Qid|Qids]);
+decode_rwalk_qid_list(_Msg, _N, _Qids) ->
+    {error, {bad_msg, rwalk}}.
 
 %% Open
 
-decode_topen(Msg) ->
-	{error, unimplemented}.
+decode_topen(<<?tag(Tag), ?fid(Fid), ?uint8(Mode), Rest/binary>>) ->
+    {ok,
+     #topen{
+        tag = Tag,
+        fid = Fid,
+        mode = Mode,
+        rest = Rest
+       }};
+decode_topen(_Msg) ->
+    {error, {bad_msg, topen}}.
 
-decode_ropen(Msg) ->
-	{error, unimplemented}.
+decode_ropen(<<?tag(Tag), ?qid_bytes(QidBytes), ?uint32(IOUnit), Rest/binary>>) ->
+    decode_ropen_qid(
+      decode_qid(QidBytes),
+      #ropen{
+         tag = Tag,
+         iounit = IOUnit,
+         rest = Rest
+        });
+decode_ropen(_Msg) ->
+    {error, {bad_msg, ropen}}.
+
+decode_ropen_qid({ok, Qid}, #ropen{} = Ropen) ->
+    {ok, Ropen#ropen{qid = Qid}};
+decode_ropen_qid({error, _}, #ropen{} = _Ropen) ->
+    {error, {bad_msg, ropen}}.
+
+
 
 %% Create
 
-decode_tcreate(Msg) ->
-	{error, unimplemented}.
+decode_tcreate(_Msg) ->
+    {error, {bad_msg, tcreate}}.
 
-decode_rcreate(Msg) ->
-	{error, unimplemented}.
+decode_rcreate(_Msg) ->
+    {error, {bad_msg, rcreate}}.
 
 %% Read
 
-decode_tread(Msg) ->
-	{error, unimplemented}.
+decode_tread(_Msg) ->
+    {error, {bad_msg, tread}}.
 
-decode_rread(Msg) ->
-	{error, unimplemented}.
+decode_rread(_Msg) ->
+    {error, {bad_msg, rread}}.
 
 %% Write
 
-decode_twrite(Msg) ->
-	{error, unimplemented}.
+decode_twrite(_Msg) ->
+    {error, {bad_msg, twrite}}.
 
-decode_rwrite(Msg) ->
-	{error, unimplemented}.
+decode_rwrite(_Msg) ->
+    {error, {bad_msg, rwrite}}.
 
 %% Clunk
 
-decode_tclunk(Msg) ->
-	{error, unimplemented}.
+decode_tclunk(_Msg) ->
+    {error, {bad_msg, tclunk}}.
 
-decode_rclunk(Msg) ->
-	{error, unimplemented}.
+decode_rclunk(_Msg) ->
+    {error, {bad_msg, rclunk}}.
 
 %% Remove
 
-decode_tremove(Msg) ->
-	{error, unimplemented}.
+decode_tremove(_Msg) ->
+    {error, {bad_msg, tremove}}.
 
-decode_rremove(Msg) ->
-	{error, unimplemented}.
+decode_rremove(_Msg) ->
+    {error, {bad_msg, rremove}}.
 
 %% Stat
 
-decode_tstat(Msg) ->
-	{error, unimplemented}.
+decode_tstat(_Msg) ->
+    {error, {bad_msg, tstat}}.
 
-decode_rstat(Msg) ->
-	{error, unimplemented}.
+decode_rstat(_Msg) ->
+    {error, {bad_msg, rstat}}.
 
 %% Wstat
 
-decode_twstat(Msg) ->
-	{error, unimplemented}.
+decode_twstat(_Msg) ->
+    {error, {bad_msg, twstat}}.
 
-decode_rwstat(Msg) ->
-	{error, unimplemented}.
+decode_rwstat(_Msg) ->
+    {error, {bad_msg, rwstat}}.
 
+%%}}} Per-type decode functions
 
+%%}}} Decode messages
 
-%%%}}} Per-type decode functions
-
-file_mode([read|Opt]) -> truncate_mode(Opt);
-file_mode([write|Opt]) -> 1 bor truncate_mode(Opt);
-file_mode([readwrite|Opt]) -> 2 bor truncate_mode(Opt);
-file_mode([exec|Opt]) -> 3 bor truncate_mode(Opt).
-
-truncate_mode([]) -> 0;
-truncate_mode([truncate]) -> 16#10.
 
 %%
 %% Record accessors
@@ -584,6 +752,38 @@ tag(#rstat{tag = Tag})    -> Tag;
 tag(#twstat{tag = Tag})   -> Tag;
 tag(#rwstat{tag = Tag})   -> Tag.
 
+%% @doc Returns the tail of the Msg that was not parsed.
+%% Non-empty tails are non-standard.
+-spec rest(Msg :: msg()) -> binary().
+rest(#tversion{rest = Rest}) -> Rest;
+rest(#rversion{rest = Rest}) -> Rest;
+rest(#tauth{rest = Rest})    -> Rest;
+rest(#rauth{rest = Rest})    -> Rest;
+rest(#rerror{rest = Rest})   -> Rest;
+rest(#tflush{rest = Rest})   -> Rest;
+rest(#rflush{rest = Rest})   -> Rest;
+rest(#tattach{rest = Rest})  -> Rest;
+rest(#rattach{rest = Rest})  -> Rest;
+rest(#twalk{rest = Rest})    -> Rest;
+rest(#rwalk{rest = Rest})    -> Rest;
+rest(#topen{rest = Rest})    -> Rest;
+rest(#ropen{rest = Rest})    -> Rest;
+rest(#tcreate{rest = Rest})  -> Rest;
+rest(#rcreate{rest = Rest})  -> Rest;
+rest(#tread{rest = Rest})    -> Rest;
+rest(#rread{rest = Rest})    -> Rest;
+rest(#twrite{rest = Rest})   -> Rest;
+rest(#rwrite{rest = Rest})   -> Rest;
+rest(#tclunk{rest = Rest})   -> Rest;
+rest(#rclunk{rest = Rest})   -> Rest;
+rest(#tremove{rest = Rest})  -> Rest;
+rest(#rremove{rest = Rest})  -> Rest;
+rest(#tstat{rest = Rest})    -> Rest;
+rest(#rstat{rest = Rest})    -> Rest;
+rest(#twstat{rest = Rest})   -> Rest;
+rest(#rwstat{rest = Rest})   -> Rest.
+
+
 -spec fid(Msg) -> fid() when
       Msg :: tattach()
            | twalk()
@@ -608,7 +808,7 @@ fid(#twstat{fid = Fid})  -> Fid.
 
 -spec afid(Msg) -> fid() when
       Msg :: tauth()
-             | tattach().
+           | tattach().
 afid(#tauth{afid = Afid})   -> Afid;
 afid(#tattach{afid = Afid}) -> Afid.
 
@@ -691,7 +891,7 @@ iounit(#rcreate{iounit = Unit}) -> Unit.
 -spec perm(Msg :: tcreate()) -> non_neg_integer().
 perm(#tcreate{perm = Perm}) -> Perm.
 
--spec mode(Msg) -> [mode()] when
+-spec mode(Msg) -> mode() when
       Msg :: topen() | tcreate().
 mode(#topen{mode = Mode})   -> Mode;
 mode(#tcreate{mode = Mode}) -> Mode.

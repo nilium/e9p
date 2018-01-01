@@ -5,6 +5,13 @@
 -define(NOTAG, 16#FFFF).
 -define(NOFID, 16#FFFFFFFF).
 
+-define(OREAD, 0).
+-define(OWRITE, 1).
+-define(ORDWR, 2).
+-define(OEXEC, 3).
+-define(OTRUNC, 16#10).
+-define(ORCLOSE, 16#40).
+
 -record(qid, {
           type    = file :: e9p_msg:qid_type(),
           version = 0    :: non_neg_integer(),
@@ -19,13 +26,15 @@
 -record(tversion, {
           tag     = 0    :: e9p_msg:tag(),
           msize   = 0    :: non_neg_integer(),
-          version = <<>> :: binary()
+          version = <<>> :: binary(),
+          rest    = <<>> :: binary()
          }).
 
 -record(rversion, {
           tag     = 0    :: e9p_msg:tag(),
           msize   = 0    :: non_neg_integer(),
-          version = <<>> :: binary()
+          version = <<>> :: binary(),
+          rest    = <<>> :: binary()
          }).
 
 %% Auth
@@ -37,12 +46,14 @@
           tag   = 0    :: e9p_msg:tag(),
           afid  = 0    :: e9p_msg:fid(),
           uname = <<>> :: binary(),
-          aname = <<>> :: binary()
+          aname = <<>> :: binary(),
+          rest  = <<>> :: binary()
          }).
 
 -record(rauth, {
           tag  = 0      :: e9p_msg:tag(),
-          aqid = #qid{} :: e9p_msg:qid()
+          aqid = #qid{} :: e9p_msg:qid(),
+          rest = <<>>   :: binary()
          }).
 
 %% Error
@@ -51,7 +62,8 @@
 
 -record(rerror, {
           tag   = 0    :: e9p_msg:tag(),
-          ename = <<>> :: binary()
+          ename = <<>> :: binary(),
+          rest  = <<>> :: binary()
          }).
 
 %% Flush
@@ -60,12 +72,14 @@
 -define(Rflush, 109).
 
 -record(tflush, {
-          tag    = 0 :: e9p_msg:tag(),
-          oldtag = 0 :: non_neg_integer()
+          tag    = 0    :: e9p_msg:tag(),
+          oldtag = 0    :: non_neg_integer(),
+          rest   = <<>> :: binary()
          }).
 
 -record(rflush, {
-          tag = 0 :: e9p_msg:tag()
+          tag  = 0    :: e9p_msg:tag(),
+          rest = <<>> :: binary()
          }).
 
 %% Attach
@@ -78,12 +92,14 @@
           fid   = 0    :: e9p_msg:fid(),
           afid  = 0    :: e9p_msg:fid(),
           uname = <<>> :: binary(),
-          aname = <<>> :: binary()
+          aname = <<>> :: binary(),
+          rest  = <<>> :: binary()
          }).
 
 -record(rattach, {
-          tag = 0      :: e9p_msg:tag(),
-          qid = #qid{} :: e9p_msg:qid()
+          tag  = 0      :: e9p_msg:tag(),
+          qid  = #qid{} :: e9p_msg:qid(),
+          rest = <<>>   :: binary()
          }).
 
 %% Walk
@@ -92,15 +108,17 @@
 -define(Rwalk, 111).
 
 -record(twalk, {
-          tag    = 0  :: e9p_msg:tag(),
-          fid    = 0  :: e9p_msg:fid(),
-          newfid = 0  :: e9p_msg:fid(),
-          nwname = [] :: [binary()]
+          tag    = 0    :: e9p_msg:tag(),
+          fid    = 0    :: e9p_msg:fid(),
+          newfid = 0    :: e9p_msg:fid(),
+          nwname = []   :: [binary()],
+          rest   = <<>> :: binary()
          }).
 
 -record(rwalk, {
-          tag   = 0  :: e9p_msg:tag(),
-          nwqid = [] :: [e9p_msg:qid()]
+          tag   = 0    :: e9p_msg:tag(),
+          nwqid = []   :: [e9p_msg:qid()],
+          rest  = <<>> :: binary()
          }).
 
 %% Open
@@ -109,18 +127,17 @@
 -define(Ropen, 113).
 
 -record(topen, {
-          tag  = 0      :: e9p_msg:tag(),
-          fid  = 0      :: e9p_msg:fid(),
-          %% The head of mode is always one of read, write, readwrite, or exec.
-          %% The second element, if present, is always 'truncate'.
-          %% mode cannot be more than two elements in length.
-          mode = [read] :: [mode()]
+          tag  = 0    :: e9p_msg:tag(),
+          fid  = 0    :: e9p_msg:fid(),
+          mode = 0    :: mode(),
+          rest = <<>> :: binary()
          }).
 
 -record(ropen, {
           tag    = 0      :: e9p_msg:tag(),
           qid    = #qid{} :: e9p_msg:qid(),
-          iounit = 0      :: non_neg_integer()
+          iounit = 0      :: non_neg_integer(),
+          rest   = <<>>   :: binary()
          }).
 
 %% Create
@@ -129,17 +146,19 @@
 -define(Rcreate, 115).
 
 -record(tcreate, {
-          tag  = 0      :: e9p_msg:tag(),
-          fid  = 0      :: e9p_msg:fid(),
-          name = <<>>   :: binary(),
-          perm = 0      :: non_neg_integer(),
-          mode = [read] :: [mode()]
+          tag  = 0    :: e9p_msg:tag(),
+          fid  = 0    :: e9p_msg:fid(),
+          name = <<>> :: binary(),
+          perm = 0    :: non_neg_integer(),
+          mode = 0    :: mode(),
+          rest = <<>> :: binary()
          }).
 
 -record(rcreate, {
           tag    = 0      :: e9p_msg:tag(),
           qid    = #qid{} :: e9p_msg:qid(),
-          iounit = 0      :: non_neg_integer()
+          iounit = 0      :: non_neg_integer(),
+          rest   = <<>>   :: binary()
          }).
 
 %% Read
@@ -148,16 +167,18 @@
 -define(Rread, 117).
 
 -record(tread, {
-          tag    = 0 :: e9p_msg:tag(),
-          fid    = 0 :: e9p_msg:fid(),
-          offset = 0 :: non_neg_integer(),
-          count  = 0 :: non_neg_integer()
+          tag    = 0    :: e9p_msg:tag(),
+          fid    = 0    :: e9p_msg:fid(),
+          offset = 0    :: non_neg_integer(),
+          count  = 0    :: non_neg_integer(),
+          rest   = <<>> :: binary()
          }).
 
 -record(rread, {
           tag   = 0    :: e9p_msg:tag(),
           count = 0    :: non_neg_integer(),
-          data  = <<>> :: binary()
+          data  = <<>> :: binary(),
+          rest  = <<>> :: binary()
          }).
 
 %% Write
@@ -170,12 +191,14 @@
           fid    = 0    :: e9p_msg:fid(),
           offset = 0    :: non_neg_integer(),
           count  = 0    :: non_neg_integer(),
-          data   = <<>> :: binary()
+          data   = <<>> :: binary(),
+          rest   = <<>> :: binary()
          }).
 
 -record(rwrite, {
-          tag   = 0 :: e9p_msg:tag(),
-          count = 0 :: non_neg_integer()
+          tag   = 0    :: e9p_msg:tag(),
+          count = 0    :: non_neg_integer(),
+          rest  = <<>> :: binary()
          }).
 
 %% Clunk
@@ -184,12 +207,14 @@
 -define(Rclunk, 121).
 
 -record(tclunk, {
-          tag = 0 :: e9p_msg:tag(),
-          fid = 0 :: e9p_msg:fid()
+          tag  = 0    :: e9p_msg:tag(),
+          fid  = 0    :: e9p_msg:fid(),
+          rest = <<>> :: binary()
          }).
 
 -record(rclunk, {
-          tag = 0 :: e9p_msg:tag()
+          tag  = 0    :: e9p_msg:tag(),
+          rest = <<>> :: binary()
          }).
 
 %% Remove
@@ -198,12 +223,14 @@
 -define(Rremove, 123).
 
 -record(tremove, {
-          tag = 0 :: e9p_msg:tag(),
-          fid = 0 :: e9p_msg:fid()
+          tag  = 0    :: e9p_msg:tag(),
+          fid  = 0    :: e9p_msg:fid(),
+          rest = <<>> :: binary()
          }).
 
 -record(rremove, {
-          tag = 0 :: e9p_msg:tag()
+          tag  = 0    :: e9p_msg:tag(),
+          rest = <<>> :: binary()
          }).
 
 %% Dir
@@ -224,7 +251,8 @@
           name   = <<>>   :: binary(),
           uid    = <<>>   :: binary(),
           gid    = <<>>   :: binary(),
-          muid   = <<>>   :: binary()
+          muid   = <<>>   :: binary(),
+          rest   = <<>>   :: binary()
          }).
 
 %% Stat
@@ -233,13 +261,15 @@
 -define(Rstat, 125).
 
 -record(tstat, {
-          tag = 0 :: e9p_msg:tag(),
-          fid = 0 :: e9p_msg:fid()
+          tag  = 0    :: e9p_msg:tag(),
+          fid  = 0    :: e9p_msg:fid(),
+          rest = <<>> :: binary()
          }).
 
 -record(rstat, {
-          tag  = 0  :: e9p_msg:tag(),
-          stat = [] :: [e9p_msg:dir()]
+          tag  = 0    :: e9p_msg:tag(),
+          stat = []   :: [e9p_msg:dir()],
+          rest = <<>> :: binary()
          }).
 
 
@@ -249,11 +279,13 @@
 -define(Rwstat, 127).
 
 -record(twstat, {
-          tag  = 0  :: e9p_msg:tag(),
-          fid  = 0  :: e9p_msg:fid(),
-          stat = [] :: [e9p_msg:dir()]
+          tag  = 0    :: e9p_msg:tag(),
+          fid  = 0    :: e9p_msg:fid(),
+          stat = []   :: [e9p_msg:dir()],
+          rest = <<>> :: binary()
          }).
 
 -record(rwstat, {
-          tag = 0 :: e9p_msg:tag()
+          tag  = 0    :: e9p_msg:tag(),
+          rest = <<>> :: binary()
          }).
