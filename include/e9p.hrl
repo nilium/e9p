@@ -176,7 +176,6 @@
 
 -record(rread, {
           tag   = 0    :: e9p_msg:tag(),
-          count = 0    :: non_neg_integer(),
           data  = <<>> :: binary(),
           rest  = <<>> :: binary()
          }).
@@ -190,7 +189,6 @@
           tag    = 0    :: e9p_msg:tag(),
           fid    = 0    :: e9p_msg:fid(),
           offset = 0    :: non_neg_integer(),
-          count  = 0    :: non_neg_integer(),
           data   = <<>> :: binary(),
           rest   = <<>> :: binary()
          }).
@@ -267,9 +265,9 @@
          }).
 
 -record(rstat, {
-          tag  = 0    :: e9p_msg:tag(),
-          stat = []   :: [e9p_msg:dir()],
-          rest = <<>> :: binary()
+          tag  = 0      :: e9p_msg:tag(),
+          stat = #dir{} :: e9p_msg:dir(),
+          rest = <<>>   :: binary()
          }).
 
 
@@ -279,10 +277,10 @@
 -define(Rwstat, 127).
 
 -record(twstat, {
-          tag  = 0    :: e9p_msg:tag(),
-          fid  = 0    :: e9p_msg:fid(),
-          stat = []   :: [e9p_msg:dir()],
-          rest = <<>> :: binary()
+          tag  = 0      :: e9p_msg:tag(),
+          fid  = 0      :: e9p_msg:fid(),
+          stat = #dir{} :: e9p_msg:dir(),
+          rest = <<>>   :: binary()
          }).
 
 -record(rwstat, {

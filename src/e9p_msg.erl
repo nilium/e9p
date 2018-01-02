@@ -417,6 +417,47 @@ decode_typed_qid({ok, Type}, Qid) ->
 decode_typed_qid({error, _} = Error, _Qid) ->
     Error.
 
+%% Dir
+
+decode_dir(<<?uint16(Size), Dir:Size/binary>>) ->
+    decode_dir_fields(Dir);
+decode_dir(_Dir) ->
+    {error, bad_dir}.
+
+decode_dir_fields(<<?uint16(Type),
+                    ?uint32(Dev),
+                    ?qid_bytes(QidBytes),
+                    ?uint32(Mode),
+                    ?uint32(Atime),
+                    ?uint32(Mtime),
+                    ?uint64(Length),
+                    ?pstring(NameLen, Name),
+                    ?pstring(UidLen, Uid),
+                    ?pstring(GidLen, Gid),
+                    ?pstring(MuidLen, Muid)
+                  >>) ->
+    decode_dir_qid(
+      decode_qid(QidBytes),
+      #dir{
+         type   = Type,
+         dev    = Dev,
+         mode   = Mode,
+         atime  = Atime,
+         mtime  = Mtime,
+         length = Length,
+         name   = Name,
+         uid    = Uid,
+         gid    = Gid,
+         muid   = Muid
+        });
+decode_dir_fields(_Dir) ->
+    {error, bad_dir}.
+
+decode_dir_qid({ok, Qid}, #dir{} = Dir) ->
+    {ok, Dir#dir{qid = Qid}};
+decode_dir_qid({error, _}, #dir{} = _Dir) ->
+    {error, bad_dir}.
+
 %% Version
 
 -spec decode_tversion(binary()) -> {ok, tversion()} | {error, {bad_msg, tversion}}.
@@ -633,57 +674,188 @@ decode_ropen_qid({error, _}, #ropen{} = _Ropen) ->
 
 %% Create
 
+decode_tcreate(<<?tag(Tag),
+                 ?fid(Fid),
+                 ?pstring(NameLen, Name),
+                 ?uint32(Perm),
+                 ?uint8(Mode),
+                 Rest/binary
+               >>) ->
+    {ok,
+     #tcreate{
+        tag  = Tag,
+        fid  = Fid,
+        name = Name,
+        perm = Perm,
+        mode = Mode,
+        rest = Rest
+       }};
 decode_tcreate(_Msg) ->
     {error, {bad_msg, tcreate}}.
 
+decode_rcreate(<<?tag(Tag), ?qid_bytes(QidBytes), ?uint32(IOUnit), Rest/binary>>) ->
+    decode_rcreate_qid(
+      decode_qid(QidBytes),
+      #rcreate{
+         tag = Tag,
+         iounit = IOUnit,
+         rest = Rest
+        });
 decode_rcreate(_Msg) ->
+    {error, {bad_msg, rcreate}}.
+
+decode_rcreate_qid({ok, Qid}, #rcreate{} = Rcreate) ->
+    {ok, Rcreate#rcreate{qid = Qid}};
+decode_rcreate_qid({error, _}, #rcreate{} = _Rcreate) ->
     {error, {bad_msg, rcreate}}.
 
 %% Read
 
+decode_tread(<<?tag(Tag), ?fid(Fid), ?uint64(Offset), ?uint32(Count), Rest/binary>>) ->
+    {ok,
+     #tread{
+        tag    = Tag,
+        fid    = Fid,
+        offset = Offset,
+        count  = Count,
+        rest   = Rest
+       }};
 decode_tread(_Msg) ->
     {error, {bad_msg, tread}}.
 
+decode_rread(<<?tag(Tag), ?uint32(Count), Data:Count/binary, Rest/binary>>) ->
+    {ok,
+     #rread{
+        tag  = Tag,
+        data = Data,
+        rest = Rest
+       }};
 decode_rread(_Msg) ->
     {error, {bad_msg, rread}}.
 
 %% Write
 
+decode_twrite(<<?tag(Tag),
+                ?fid(Fid),
+                ?uint64(Offset),
+                ?uint32(Count),
+                Data:Count/binary,
+                Rest/binary
+              >>) ->
+    {ok,
+     #twrite{
+        tag    = Tag,
+        fid    = Fid,
+        offset = Offset,
+        data   = Data,
+        rest   = Rest
+       }};
 decode_twrite(_Msg) ->
     {error, {bad_msg, twrite}}.
 
+decode_rwrite(<<?tag(Tag), ?uint32(Count), Rest/binary>>) ->
+    {ok,
+     #rwrite{
+        tag   = Tag,
+        count = Count,
+        rest  = Rest
+       }};
 decode_rwrite(_Msg) ->
     {error, {bad_msg, rwrite}}.
 
 %% Clunk
 
+decode_tclunk(<<?tag(Tag), ?fid(Fid), Rest/binary>>) ->
+    {ok,
+     #tclunk{
+        tag  = Tag,
+        fid  = Fid,
+        rest = Rest
+       }};
 decode_tclunk(_Msg) ->
     {error, {bad_msg, tclunk}}.
 
+decode_rclunk(<<?tag(Tag), Rest/binary>>) ->
+    {ok,
+     #rclunk{
+        tag  = Tag,
+        rest = Rest
+       }};
 decode_rclunk(_Msg) ->
     {error, {bad_msg, rclunk}}.
 
 %% Remove
 
+decode_tremove(<<?tag(Tag), ?fid(Fid), Rest/binary>>) ->
+    {ok,
+     #tremove{
+        tag  = Tag,
+        fid  = Fid,
+        rest = Rest
+       }};
 decode_tremove(_Msg) ->
     {error, {bad_msg, tremove}}.
 
+decode_rremove(<<?tag(Tag), Rest/binary>>) ->
+    {ok,
+     #rremove{
+        tag  = Tag,
+        rest = Rest
+       }};
 decode_rremove(_Msg) ->
     {error, {bad_msg, rremove}}.
 
 %% Stat
 
+decode_tstat(<<?tag(Tag), ?fid(Fid), Rest/binary>>) ->
+    {ok,
+     #tstat{
+        tag  = Tag,
+        fid  = Fid,
+        rest = Rest
+       }};
 decode_tstat(_Msg) ->
     {error, {bad_msg, tstat}}.
 
+decode_rstat(<<?tag(Tag), ?uint16(DirLen), DirBytes:DirLen/binary, Rest/binary>>) ->
+    decode_rstat_dir(
+      decode_dir(DirBytes),
+      #rstat{
+         tag  = Tag,
+         rest = Rest
+        });
 decode_rstat(_Msg) ->
+    {error, {bad_msg, rstat}}.
+
+decode_rstat_dir({ok, Dir}, #rstat{} = Rstat) ->
+    {ok, Rstat#rstat{stat = Dir}};
+decode_rstat_dir({error, _}, #rstat{} = _Rstat) ->
     {error, {bad_msg, rstat}}.
 
 %% Wstat
 
+decode_twstat(<<?tag(Tag), ?fid(Fid), ?uint16(DirLen), DirBytes:DirLen/binary, Rest/binary>>) ->
+    decode_twstat_dir(
+      decode_dir(DirBytes),
+      #twstat{
+         tag  = Tag,
+         fid  = Fid,
+         rest = Rest
+        });
 decode_twstat(_Msg) ->
     {error, {bad_msg, twstat}}.
 
+decode_twstat_dir({ok, Dir}, #twstat{} = Twstat) ->
+    {ok, Twstat#twstat{stat = Dir}};
+decode_twstat_dir({error, _}, #twstat{} = _Twstat) ->
+    {error, {bad_msg, twstat}}.
+
+decode_rwstat(<<?tag(Tag), Rest/binary>>) ->
+    {ok,
+     #rwstat{
+        tag  = Tag,
+        rest = Rest
+       }};
 decode_rwstat(_Msg) ->
     {error, {bad_msg, rwstat}}.
 
@@ -831,7 +1003,7 @@ qid(#ropen{qid = Qid})   -> Qid;
 qid(#rcreate{qid = Qid}) -> Qid;
 qid(#rauth{aqid = Qid}) -> Qid.
 
--spec stat(Msg) -> [dir()] when
+-spec stat(Msg) -> dir() when
       Msg :: twstat()
            | rstat().
 stat(#twstat{stat = Stat}) -> Stat;
@@ -839,12 +1011,10 @@ stat(#rstat{stat = Stat})  -> Stat.
 
 -spec count(Msg) -> non_neg_integer() when
       Msg :: tread()
-           | rread()
-           | twrite()
            | rwrite().
 count(#tread{count = N})  -> N;
-count(#rread{count = N})  -> N;
-count(#twrite{count = N}) -> N;
+count(#rread{data = Data})  -> byte_size(Data);
+count(#twrite{data = Data}) -> byte_size(Data);
 count(#rwrite{count = N}) -> N.
 
 -spec offset(Msg) -> non_neg_integer() when
