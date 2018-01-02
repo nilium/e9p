@@ -129,7 +129,7 @@
 -record(topen, {
           tag  = 0    :: e9p_msg:tag(),
           fid  = 0    :: e9p_msg:fid(),
-          mode = 0    :: mode(),
+          mode = 0    :: e9p_msg:mode(),
           rest = <<>> :: binary()
          }).
 
@@ -150,7 +150,7 @@
           fid  = 0    :: e9p_msg:fid(),
           name = <<>> :: binary(),
           perm = 0    :: non_neg_integer(),
-          mode = 0    :: mode(),
+          mode = 0    :: e9p_msg:mode(),
           rest = <<>> :: binary()
          }).
 

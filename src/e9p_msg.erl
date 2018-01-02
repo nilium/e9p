@@ -9,6 +9,7 @@
          qid/1,
          afid/1,
          msize/1,
+         version/1,
          stat/1,
          count/1,
          offset/1,
@@ -475,7 +476,7 @@ decode_tversion(_) ->
 -spec decode_rversion(binary()) -> {ok, rversion()} | {error, {bad_msg, rversion}}.
 decode_rversion(<<?tag(Tag), ?uint32(Msize), ?pstring(Len, Version), Rest/binary>>) ->
     {ok,
-     #tversion{
+     #rversion{
         tag     = Tag,
         msize   = Msize,
         version = Version,
@@ -992,6 +993,12 @@ afid(#tattach{afid = Afid}) -> Afid.
            | rversion().
 msize(#tversion{msize = Msize}) -> Msize;
 msize(#rversion{msize = Msize}) -> Msize.
+
+-spec version(Msg) -> binary() when
+      Msg :: tversion()
+           | rversion().
+version(#tversion{version = Version}) -> Version;
+version(#rversion{version = Version}) -> Version.
 
 -spec qid(Msg) -> qid() when
       Msg :: rattach()
